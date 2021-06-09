@@ -1,68 +1,66 @@
 library(quadprog)
-library(ggplot2)
 
-wsvm.fit <- function(x, y,
-                     type,
+#fit svm
+wsvm.fit <- function(x, y, type,
                      three.weights = list(maj = 1, min = 1, syn = 1),
                      kernel = list(type = "linear", par = NULL),
                      epsilon = 1e-3){
+## type: type of an observation. maj(majority), min(minority) or syn(synthetic sample)
+  
+  #turn factor into numeric vector with -1 and 1
+  y.values <- -1 * (y == -1) + 1 * (y ==1)
+  
+  #weight vector
+  weight.vec <- rep.int(0, length(y.values))
+  weight.vec[type == "maj"] <- three.weights$maj
+  weight.vec[type == "min"] <- three.weights$min
+  weight.vec[type == "syn"] <- three.weights$syn
 
-#y.values <- as.numeric(y)
-#y.values[y.values == 1] <- -1
-#y.values[y.values == 2] <- 1
-y.values <- -1 * (y == -1) + 1 * (y ==1)
-weight.vec <- rep.int(0, length(y.values))
-weight.vec[type == "maj"] <- three.weights$maj
-weight.vec[type == "min"] <- three.weights$min
-weight.vec[type == "syn"] <- three.weights$syn
-#declare preliminary quantities
-epsilon.weighted <- weight.vec * epsilon
-X <- as.matrix(x)
-Y <- as.matrix(y.values)
-n.data <- nrow(Y)
-I.n <- diag(rep(1, n.data))
+  #declare preliminary quantities
 
-#compute kernel matrix. Dmat_ij = y_i * y_j * svm.kernel(x_i, x_j).
-K <- svm.kernel(X, X, kernel)
+  epsilon.weighted <- weight.vec * epsilon
+  X <- as.matrix(x)
+  Y <- as.matrix(y.values)
+  n.data <- nrow(Y)
+  I.n <- diag(rep(1, n.data))
+  
+  #compute kernel matrix. Dmat_ij = y_i * y_j * svm.kernel(x_i, x_j).
+  K <- svm.kernel(X, X, kernel)
+  Dmat <- K * (Y %*% t(Y))
+  diag(Dmat) <- diag(Dmat) + 1e-5
+  
+  #prepare QP
+  dvec <- rep(1, n.data)
+  Amat <- cbind(Y, I.n, -I.n)
+  nonzero <- find.nonzero(Amat) #find.nonzero is a custom function
+  Amat = nonzero$Amat.compact
+  Aind = nonzero$Aind
+  bvec <- c(0, rep(0, n.data), -weight.vec) #wsvm
+  
+  #find alpha by solving QP
+  alpha <- solve.QP.compact(Dmat, dvec, Amat, Aind, bvec, meq = 1)$solution
+  alpha.sv <- alpha[alpha > epsilon.weighted]
 
-Dmat <- K * (Y %*% t(Y))
-diag(Dmat) <- diag(Dmat) + 1e-5
+  #compute the index and the number of support vectors
+  index.full <- 1:n.data
+  sv.index <- index.full[alpha > epsilon.weighted]#training data points(x_i) whose alpha_i > epsilon are called support vectors
+  sv.number <- length(sv.index)
+  sv.index.C <- index.full[alpha > epsilon.weighted & alpha < (weight.vec - epsilon.weighted)]
+  sv = list(index = sv.index, number = sv.number, index.C = sv.index.C)
+  alpha[-sv.index] <- 0 #set alpha_i = 0 if it is too small
 
-#prepare QP
-dvec <- rep(1, n.data)
-Amat <- cbind(Y, I.n, -I.n)
+  #compute bias term
+  if(length(sv.index.C) == 0){
+    sv.index.C <- index.full[(alpha > epsilon.weighted) & (alpha <= weight.vec)]
+    }
+  sv.bias <- Y[sv.index.C] - K[sv.index.C, sv.index] %*% (alpha[sv.index] * Y[sv.index])
+  bias <- mean(sv.bias) #average over all support vectors for numerical stability
 
-nonzero <- find.nonzero(Amat) #find.nonzero is a custom function
-Amat = nonzero$Amat.compact
-
-Aind = nonzero$Aind
-bvec <- c(0, rep(0, n.data), -weight.vec) #wsvm
-
-#find alpha by QP
-alpha <- solve.QP.compact(Dmat, dvec, Amat, Aind, bvec, meq = 1)$solution
-alpha.sv <- alpha[alpha > epsilon.weighted]
-
-#compute the index and the number of support vectors
-index.full <- 1:n.data
-sv.index <- index.full[alpha > epsilon.weighted]#training data points(x_i) whose alpha_i > epsilon are called support vectors
-sv.number <- length(sv.index)
-sv.index.C <- index.full[alpha > epsilon.weighted & alpha < (weight.vec - epsilon.weighted)]
-sv = list(index = sv.index, number = sv.number, index.C = sv.index.C)
-
-alpha[-sv.index] <- 0 #set alpha_i = 0 if it is too small
-
-#compute bias
-if(length(sv.index.C) == 0){
-  sv.index.C <- index.full[(alpha > epsilon.weighted) & (alpha <= weight.vec)]
-}
-sv.bias <- Y[sv.index.C] - K[sv.index.C, sv.index] %*% (alpha[sv.index] * Y[sv.index])
-bias <- mean(sv.bias) #average over all support vectors for numerical stability
-
-#prepare output
-model <- list(alpha = alpha, alpha.sv = alpha.sv,
+  #prepare output
+  model <- list(alpha = alpha, alpha.sv = alpha.sv,
               bias = bias, sv = sv, kernel = kernel, weight.vec = weight.vec,
               X = X, Y = Y)
-}
+  }
 
 svm.kernel <- function(X, U, kernel = list(type = "linear", par = NULL)){
   if (kernel$type == "linear")
