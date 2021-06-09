@@ -1,4 +1,5 @@
 library(quadprog)
+library(caret)
 
 #fit svm
 wsvm.fit <- function(x, y, type,
@@ -114,3 +115,48 @@ find.nonzero <- function(Amat){
   
   return(compact)
 }
+
+
+##caret inferface for data preprocessing and hyperparamter tuning
+weighted.svm <- list(type = "Classification", library = "kernlab", prob = NULL, loop = NULL) 
+
+#1. paramters element
+prm <- data.frame(parameter = c("sigma"), class = c("numeric"), label = c("Sigma"))
+weighted.svm$parameters <- prm
+
+#2. grid element
+svmGrid <- function(x, y, len = NULL, search = "grid") {
+  library(kernlab)
+  ## This produces low, middle and high values for sigma 
+  ## (i.e. a vector with 3 elements).
+  x.values <- as.matrix( x[-dim(x)[2]])
+  sigmas <- kernlab::sigest(x.values, na.action = na.omit, scaled = TRUE)  
+  ## To use grid search:
+  rng <- extendrange(log(sigmas), f = .75)
+  out <- data.frame(sigma = exp(seq(from = rng[1], to = rng[2], length.out= len)))
+  return(out)
+}
+weighted.svm$grid <- svmGrid
+
+#3. fit element
+svmFit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) { 
+  wsvm.fit(x = x[-dim(x)[2]], #separate 'type' column from predictors
+           y = y,
+           type = x[dim(x)[2]],
+           ..., #ellipsis for three.weights argument
+           kernel = list(type = "rbf", par = param$sigma)) 
+}
+weighted.svm$fit <- svmFit
+
+#4. prediction
+svmPred <- function(modelFit, newdata, preProc = NULL, submodels = NULL){
+  pred <- wsvm.predict(newdata[-dim(newdata)[2]], #separate 'type' column from predictors
+                       modelFit)
+  return(pred$predicted.Y)
+}
+weighted.svm$predict <- svmPred
+
+
+#6. sort
+svmSort <- function(x) x[order(x$sigma),] #the lower the sigma, the smoother the boundary
+weighted.svm$sort <- svmSort
